@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import torch
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk, DatasetDict
 
 import transformers
 from transformers import (
@@ -240,50 +240,57 @@ def main():
     # For CSV/JSON files this script will use the first column for the full image path and the second column for the
     # captions (unless you specify column names for this with the `image_column` and `caption_column` arguments).
     # 
-    if data_args.dataset_name is not None:
-        # Downloading and loading a dataset from the hub.
-        dataset = load_dataset(
-            data_args.dataset_name,
-            data_args.dataset_config_name,
-            cache_dir=model_args.cache_dir,
-            keep_in_memory=False,
-            data_dir=data_args.data_dir,
-            token=model_args.token,
-        )
-        if "validation" not in dataset.keys():
-            dataset["validation"] = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                split=f"train[:{data_args.validation_split_percentage}%]",
-                cache_dir=model_args.cache_dir,
-                use_auth_token=True if model_args.use_auth_token else None,
-                # streaming=data_args.streaming,
-            )
-            dataset["train"] = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                split=f"train[{data_args.validation_split_percentage}%:]",
-                cache_dir=model_args.cache_dir,
-                use_auth_token=True if model_args.use_auth_token else None,
-                # streaming=data_args.streaming,
-            )
-    else:
-        data_files = {}
-        if data_args.train_file is not None:
-            data_files["train"] = data_args.train_file
-            extension = data_args.train_file.split(".")[-1]
-        if data_args.validation_file is not None:
-            data_files["validation"] = data_args.validation_file
-            extension = data_args.validation_file.split(".")[-1]
-        if data_args.test_file is not None:
-            data_files["test"] = data_args.test_file
-            extension = data_args.test_file.split(".")[-1]
-        dataset = load_dataset(
-            extension,
-            data_files=data_files,
-            cache_dir=model_args.cache_dir,
-            token=model_args.token,
-        )
+    # if data_args.dataset_name is not None:
+    #     # Downloading and loading a dataset from the hub.
+    #     dataset = load_dataset(
+    #         data_args.dataset_name,
+    #         data_args.dataset_config_name,
+    #         cache_dir=model_args.cache_dir,
+    #         keep_in_memory=False,
+    #         data_dir=data_args.data_dir,
+    #         token=model_args.token,
+    #     )
+    #     if "validation" not in dataset.keys():
+    #         dataset["validation"] = load_dataset(
+    #             data_args.dataset_name,
+    #             data_args.dataset_config_name,
+    #             split=f"train[:{data_args.validation_split_percentage}%]",
+    #             cache_dir=model_args.cache_dir,
+    #             use_auth_token=True if model_args.use_auth_token else None,
+    #             # streaming=data_args.streaming,
+    #         )
+    #         dataset["train"] = load_dataset(
+    #             data_args.dataset_name,
+    #             data_args.dataset_config_name,
+    #             split=f"train[{data_args.validation_split_percentage}%:]",
+    #             cache_dir=model_args.cache_dir,
+    #             use_auth_token=True if model_args.use_auth_token else None,
+    #             # streaming=data_args.streaming,
+    #         )
+    # else:
+    #     data_files = {}
+    #     if data_args.train_file is not None:
+    #         data_files["train"] = data_args.train_file
+    #         extension = data_args.train_file.split(".")[-1]
+    #     if data_args.validation_file is not None:
+    #         data_files["validation"] = data_args.validation_file
+    #         extension = data_args.validation_file.split(".")[-1]
+    #     if data_args.test_file is not None:
+    #         data_files["test"] = data_args.test_file
+    #         extension = data_args.test_file.split(".")[-1]
+    #     dataset = load_dataset(
+    #         extension,
+    #         data_files=data_files,
+    #         cache_dir=model_args.cache_dir,
+    #         token=model_args.token,
+    #     )
+
+    train_dataset = load_from_disk("../data/bimodal-lmpa-shuffled-cg/train/train")
+    valid_dataset = load_from_disk("../data/bimodal-lmpa-shuffled-cg/valid/valid")
+    dataset = DatasetDict({
+        "train": train_dataset,
+        "validation": valid_dataset
+    })
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
 
@@ -316,6 +323,12 @@ def main():
     asm_encoder = dual_encoder.assembly_model
     asm_encoder_config = dual_encoder.config.assembly_config
     asm_encoder.pooler = None   # remove pooler
+    for param in asm_encoder.parameters():
+        param.requires_grad = False
+    if hasattr(asm_encoder, "encoder") and hasattr(asm_encoder.encoder, "layer") and len(asm_encoder.encoder.layer) > 0:
+        for param in asm_encoder.encoder.layer[-1].parameters():
+            param.requires_grad = True
+
     asm_tokenizer = LongelmTokenizer.from_pretrained(
         model_args.asm_tokenizer_name_or_path,
         cache_dir=model_args.cache_dir,
@@ -340,6 +353,9 @@ def main():
         quantization_config=quantization_config,
     )
     src_tokenizer.add_tokens('<asm_token>')
+    src_model.resize_token_embeddings(len(src_tokenizer))
+    for param in src_model.parameters():
+        param.requires_grad = False
 
     # build prober
     config = SrcProberConfig(
@@ -352,9 +368,9 @@ def main():
     model = SrcProberForConditionalGeneration(
         config=config,
         asm_encoder=asm_encoder,
+        gnn_encoder=None,
         src_language_model=src_model
     )
-    model.resize_token_embeddings(len(src_tokenizer))
     print_trainable_parameters(model)
 
     # set seed for torch dataloaders
@@ -389,6 +405,30 @@ def main():
         src_tokenizer.pad_token = src_tokenizer.eos_token   # NOTE: check if correct
         model.config.pad_token_id = src_tokenizer.convert_tokens_to_ids(src_tokenizer.pad_token)
         def collate_fn(examples):
+            sources = [example['src'] for example in examples]
+            sources = ['<asm_token>\n' + s for s in sources]
+            source_inputs = src_tokenizer(
+                sources,
+                max_length=data_args.max_seq_length,
+                padding='longest',
+                truncation=True,
+                return_tensors='pt'
+            )
+            assembly_inputs = asm_tokenizer.batch_inst_encode_cg(examples)
+            assembly_inputs.pop('return_loss', None)
+            return {
+                'input_ids': source_inputs['input_ids'],
+                'attention_mask': source_inputs['attention_mask'],
+                'labels': source_inputs['input_ids'],
+                'longelm_input_ids': assembly_inputs['longelm_input_ids'],
+                'longelm_attention_mask': assembly_inputs['longelm_attention_mask'],
+                'longelm_graph_attention_mask': assembly_inputs['longelm_graph_attention_mask'],
+                'longelm_relative_node_positions': assembly_inputs['longelm_relative_node_positions'],
+                'gnn_edge_index': assembly_inputs['gnn_edge_index'],
+                'gnn_batch_index': assembly_inputs['gnn_batch_index'],
+                'gnn_target_node_indices': assembly_inputs['gnn_target_node_indices'],
+            }
+        def collate_fn_cg(examples):
             # NOTE: currently process on the fly
             sources = [example['src'] for example in examples]
             sources = ['<asm_token>\n' + s for s in sources]    # '\n' or ' ' or ''
@@ -399,17 +439,21 @@ def main():
                 truncation=True,
                 return_tensors='pt'
             )
-            assembly_inputs = asm_tokenizer.batch_inst_encode(
-                [eval(example['codeart']) for example in examples]
-            )
+            assembly_inputs = asm_tokenizer.batch_inst_encode_cg(examples)
+            assembly_inputs.pop('return_loss', None)
             return {
                 'input_ids': source_inputs['input_ids'],
                 'attention_mask': source_inputs['attention_mask'],
                 'labels': source_inputs['input_ids'],
-                'asm_input_ids': assembly_inputs['input_ids'],
-                'asm_attention_mask': assembly_inputs['attention_mask'],
-                'asm_graph_attention_mask': assembly_inputs['graph_attention_mask'],
-                'asm_relative_node_positions': assembly_inputs['relative_node_positions'],
+
+                'longelm_input_ids': assembly_inputs['longelm_input_ids'],
+                'longelm_attention_mask': assembly_inputs['longelm_attention_mask'],
+                'longelm_graph_attention_mask': assembly_inputs['longelm_graph_attention_mask'],
+                'longelm_relative_node_positions': assembly_inputs['longelm_relative_node_positions'],
+                
+                'gnn_edge_index': assembly_inputs['gnn_edge_index'],
+                'gnn_batch_index': assembly_inputs['gnn_batch_index'],
+                'gnn_target_node_indices': assembly_inputs['gnn_target_node_indices'],
             }
     elif "llama" in model_args.src_model_name_or_path:
         raise NotImplementedError
@@ -422,7 +466,7 @@ def main():
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
         eval_dataset=eval_dataset if training_args.do_eval else None,
-        data_collator=collate_fn,
+        data_collator=collate_fn_cg,
     )
     
     # 9. Training

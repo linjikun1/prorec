@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import torch
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk, DatasetDict
 
 import transformers
 from transformers import (
@@ -201,7 +201,7 @@ class DataTrainingArguments:
         default=False, metadata={"help": "Overwrite the cached training and evaluation sets"}
     )
     preprocessing_num_workers: Optional[int] = field(
-        default=None,
+        default=4,
         metadata={"help": "The number of processes to use for the preprocessing."},
     )
 
@@ -304,50 +304,57 @@ def main():
     # For CSV/JSON files this script will use the first column for the full image path and the second column for the
     # captions (unless you specify column names for this with the `image_column` and `caption_column` arguments).
     #
-    if data_args.dataset_name is not None:
-        # Downloading and loading a dataset from the hub.
-        dataset = load_dataset(
-            data_args.dataset_name,
-            data_args.dataset_config_name,
-            cache_dir=model_args.cache_dir,
-            keep_in_memory=False,
-            data_dir=data_args.data_dir,
-            token=model_args.token,
-        )
-        if "validation" not in dataset.keys():
-            dataset["validation"] = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                split=f"train[:{data_args.validation_split_percentage}%]",
-                cache_dir=model_args.cache_dir,
-                use_auth_token=True if model_args.use_auth_token else None,
-                # streaming=data_args.streaming,
-            )
-            dataset["train"] = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                split=f"train[{data_args.validation_split_percentage}%:]",
-                cache_dir=model_args.cache_dir,
-                use_auth_token=True if model_args.use_auth_token else None,
-                # streaming=data_args.streaming,
-            )
-    else:
-        data_files = {}
-        if data_args.train_file is not None:
-            data_files["train"] = data_args.train_file
-            extension = data_args.train_file.split(".")[-1]
-        if data_args.validation_file is not None:
-            data_files["validation"] = data_args.validation_file
-            extension = data_args.validation_file.split(".")[-1]
-        if data_args.test_file is not None:
-            data_files["test"] = data_args.test_file
-            extension = data_args.test_file.split(".")[-1]
-        dataset = load_dataset(
-            extension,
-            data_files=data_files,
-            cache_dir=model_args.cache_dir,
-            token=model_args.token,
-        )
+    # if data_args.dataset_name is not None:
+    #     # Downloading and loading a dataset from the hub.
+    #     dataset = load_dataset(
+    #         data_args.dataset_name,
+    #         data_args.dataset_config_name,
+    #         cache_dir=model_args.cache_dir,
+    #         keep_in_memory=False,
+    #         data_dir=data_args.data_dir,
+    #         token=model_args.token,
+    #     )
+    #     if "validation" not in dataset.keys():
+    #         dataset["validation"] = load_dataset(
+    #             data_args.dataset_name,
+    #             data_args.dataset_config_name,
+    #             split=f"train[:{data_args.validation_split_percentage}%]",
+    #             cache_dir=model_args.cache_dir,
+    #             use_auth_token=True if model_args.use_auth_token else None,
+    #             # streaming=data_args.streaming,
+    #         )
+    #         dataset["train"] = load_dataset(
+    #             data_args.dataset_name,
+    #             data_args.dataset_config_name,
+    #             split=f"train[{data_args.validation_split_percentage}%:]",
+    #             cache_dir=model_args.cache_dir,
+    #             use_auth_token=True if model_args.use_auth_token else None,
+    #             # streaming=data_args.streaming,
+    #         )
+    # else:
+    #     data_files = {}
+    #     if data_args.train_file is not None:
+    #         data_files["train"] = data_args.train_file
+    #         extension = data_args.train_file.split(".")[-1]
+    #     if data_args.validation_file is not None:
+    #         data_files["validation"] = data_args.validation_file
+    #         extension = data_args.validation_file.split(".")[-1]
+    #     if data_args.test_file is not None:
+    #         data_files["test"] = data_args.test_file
+    #         extension = data_args.test_file.split(".")[-1]
+    #     dataset = load_dataset(
+    #         extension,
+    #         data_files=data_files,
+    #         cache_dir=model_args.cache_dir,
+    #         token=model_args.token,
+    #     )
+
+    train_dataset = load_from_disk("../data/bimodal-lmpa-shuffled/train/train")
+    valid_dataset = load_from_disk("../data/bimodal-lmpa-shuffled/valid/valid")
+    dataset = DatasetDict({
+        "train": train_dataset,
+        "validation": valid_dataset
+    })
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
 

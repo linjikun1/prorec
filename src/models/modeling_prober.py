@@ -24,6 +24,7 @@ from transformers.modeling_outputs import (
 )
 from typing import Optional, Union, Tuple, Dict, List, Callable, Any
 
+from .modeling_dualencoder import CG_GNN_Encoder
 
 @dataclass
 class SrcProberCausalLMOutputWithPast(ModelOutput):
@@ -36,12 +37,15 @@ class SrcProberCausalLMOutputWithPast(ModelOutput):
 
 
 class SrcProberMultiModalProjector(nn.Module):
-    def __init__(self, config: SrcProberConfig):
+    def __init__(self, config: SrcProberConfig, gnn_output_dim: int):
         super().__init__()
 
-        self.linear_1 = nn.Linear(config.asm_encoder_config.hidden_size, config.src_lm_config.hidden_size, bias=True)
+        self.linear_1 = nn.Linear(gnn_output_dim, config.src_lm_config.hidden_size, bias=True)
         self.act = ACT2FN[config.projector_hidden_act]
         self.linear_2 = nn.Linear(config.src_lm_config.hidden_size, config.src_lm_config.hidden_size, bias=True)
+        # self.linear_1 = nn.Linear(config.asm_encoder_config.hidden_size, config.src_lm_config.hidden_size, bias=True)
+        # self.act = ACT2FN[config.projector_hidden_act]
+        # self.linear_2 = nn.Linear(config.src_lm_config.hidden_size, config.src_lm_config.hidden_size, bias=True)
 
     def forward(self, bin_features):
         hidden_states = self.linear_1(bin_features)
@@ -59,6 +63,7 @@ class SrcProberForConditionalGeneration(PreTrainedModel):
         self,
         config=None,
         asm_encoder=None,
+        gnn_encoder=None,
         src_language_model=None,
     ):
         super().__init__(config)
@@ -68,7 +73,21 @@ class SrcProberForConditionalGeneration(PreTrainedModel):
             self.asm_encoder = asm_encoder
         else:
             self.asm_encoder = LongelmModel(config.asm_encoder_config, add_pooling_layer=False)
-        self.projection = SrcProberMultiModalProjector(config)
+        
+        if gnn_encoder is None:
+            hidden_dim = config.asm_encoder_config.hidden_size // 4
+            self.gnn_encoder = CG_GNN_Encoder(
+                input_dim=config.asm_encoder_config.hidden_size,
+                hidden_dim=hidden_dim,
+                num_layers=2,
+                heads=4,
+            )
+        else:
+            self.gnn_encoder = gnn_encoder
+        gnn_output_dim = self.gnn_encoder.output_dim
+
+        self.projection = SrcProberMultiModalProjector(config, gnn_output_dim)
+
         if src_language_model == 'empty':
             self.src_language_model = None
         elif src_language_model:
@@ -77,9 +96,13 @@ class SrcProberForConditionalGeneration(PreTrainedModel):
             self.src_language_model = AutoModelForCausalLM.from_config(config.src_lm_config)
         # TODO: understand proper pad token id
         self.pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
-        # freeze encoder
+        # freeze encoder except last layer
         for p in self.asm_encoder.parameters():
             p.requires_grad = False
+        if hasattr(self.asm_encoder, "encoder") and hasattr(self.asm_encoder.encoder, "layer") and len(self.asm_encoder.encoder.layer) > 0:
+            for p in self.asm_encoder.encoder.layer[-1].parameters():
+                p.requires_grad = True
+
         # freeze lm
         if self.src_language_model:
             for p in self.src_language_model.parameters():
@@ -202,16 +225,26 @@ class SrcProberForConditionalGeneration(PreTrainedModel):
 
     def forward(
         self,
-        asm_input_ids: torch.LongTensor = None,
-        asm_attention_mask: Optional[torch.Tensor] = None,
-        asm_graph_attention_mask: Optional[torch.Tensor] = None,
-        asm_relative_node_positions: Optional[torch.Tensor] = None,
+        # asm_input_ids: torch.LongTensor = None,
+        # asm_attention_mask: Optional[torch.Tensor] = None,
+        # asm_graph_attention_mask: Optional[torch.Tensor] = None,
+        # asm_relative_node_positions: Optional[torch.Tensor] = None,
+
+        # [新增] GNN 需要的输入 (来自 collate_fn_cg)
+        longelm_input_ids: torch.LongTensor = None,
+        longelm_attention_mask: Optional[torch.Tensor] = None,
+        longelm_graph_attention_mask: Optional[torch.Tensor] = None,
+        longelm_relative_node_positions: Optional[torch.Tensor] = None,
+        gnn_edge_index: Optional[torch.LongTensor] = None,
+        gnn_batch_index: Optional[torch.LongTensor] = None,
+        gnn_target_node_indices: Optional[torch.LongTensor] = None,
+
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.LongTensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[torch.FloatTensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
-        asm_feature_select_strategy: Optional[str] = None,
+        # asm_feature_select_strategy: Optional[str] = None,
         labels: torch.LongTensor = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
@@ -225,47 +258,79 @@ class SrcProberForConditionalGeneration(PreTrainedModel):
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        asm_feature_select_strategy = (
-            asm_feature_select_strategy
-            if asm_feature_select_strategy is not None
-            else self.config.asm_feature_select_strategy
-        )
+        # asm_feature_select_strategy = (
+        #     asm_feature_select_strategy
+        #     if asm_feature_select_strategy is not None
+        #     else self.config.asm_feature_select_strategy
+        # )
 
         if inputs_embeds is None:
             # 1. get text input embeddings
             inputs_embeds = self.get_input_embeddings()(input_ids)
 
             # 2. merge text and asms
-            if asm_input_ids is not None and input_ids.shape[1] != 1:
-                # encode assembly
-                encoder_outputs = self.asm_encoder(
-                    input_ids=asm_input_ids,
-                    attention_mask=asm_attention_mask,
-                    graph_attention_mask=asm_graph_attention_mask,
-                    relative_node_positions=asm_relative_node_positions,
+            if longelm_input_ids is not None:
+                # 步骤 2.1: 运行 GNN 编码器 (和阶段一完全一样)
+                longelm_outputs = self.asm_encoder(
+                    input_ids=longelm_input_ids,
+                    attention_mask=longelm_attention_mask,
+                    graph_attention_mask=longelm_graph_attention_mask,
+                    relative_node_positions=longelm_relative_node_positions,
                     output_attentions=False,
                     output_hidden_states=False,
                     return_dict=return_dict,
                 )
-                if asm_feature_select_strategy == 'all':
-                    asm_features = encoder_outputs[0]
-                elif asm_feature_select_strategy == 'nodes':
-                    asm_features = encoder_outputs[0][:, -201:-1]  # FIXME: use config
-                elif asm_feature_select_strategy == 'nodes+global':
-                    asm_features = encoder_outputs[0][:, -201:]
-                else:
-                    raise ValueError(f"Unexpected select features strategy: {self.config.asm_feature_select_strategy}")
-                # project embeddings
-                asm_features = self.projection(asm_features)
-                inputs_embeds, attention_mask, labels, position_ids = self._merge_input_ids_with_asm_features(
-                    asm_features, inputs_embeds, input_ids, attention_mask, labels
+                
+                # [N_total_nodes, longelm_hidden_dim]
+                initial_node_features = longelm_outputs[0][:, 0, :]
+                gnn_dtype = next(self.gnn_encoder.parameters()).dtype
+                if initial_node_features.dtype != gnn_dtype:
+                    initial_node_features = initial_node_features.to(gnn_dtype)
+                
+                # [N_total_nodes, gnn_output_dim]
+                reinforced_node_features = self.gnn_encoder(
+                    x=initial_node_features,
+                    edge_index=gnn_edge_index
                 )
-                if labels is None:
-                    labels = torch.full_like(attention_mask, self.config.ignore_index).to(torch.long)
-
+                
+                # [Batch_size, gnn_output_dim]
+                projector_dtype = self.projection.linear_1.weight.dtype
+                target_features = reinforced_node_features.index_select(0, gnn_target_node_indices)
+                if target_features.dtype != projector_dtype:
+                    target_features = target_features.to(projector_dtype)
+                
+                # 步骤 2.2: 通过可训练的 Prober (MLP) 投影
+                # [Batch_size, lm_hidden_dim]
+                asm_features = self.projection(target_features)
+                
+                # `<asm_token>` 位置
+                asm_token_mask = (input_ids == self.config.asm_token_index)
+                num_special_tokens = int(asm_token_mask.sum().item())
+                if num_special_tokens > 0:
+                    # 确保每个样本只有一个 <asm_token>
+                    if asm_token_mask.sum(dim=1).min() == 0:
+                        raise ValueError("Some samples are missing the <asm_token>.")
+                    
+                    asm_token_indices = torch.where(asm_token_mask)
+                    
+                    # 在推理时，`generate` 可能会复制输入序列（例如 num_return_sequences>1），
+                    # 但我们并不会重复编码后的 GNN 特征。因此需要把每个样本得到的 asm 特征
+                    # 重复到与 `<asm_token>` 出现的次数一致，才能成功写回 `inputs_embeds`。
+                    if asm_features.shape[0] != num_special_tokens:
+                        if asm_features.shape[0] == 0 or num_special_tokens % asm_features.shape[0] != 0:
+                            raise RuntimeError(
+                                f"Mismatch between asm features ({asm_features.shape[0]}) "
+                                f"and <asm_token> count ({num_special_tokens})."
+                            )
+                        repeat_factor = num_special_tokens // asm_features.shape[0]
+                        asm_features = asm_features.repeat_interleave(repeat_factor, dim=0)
+                    
+                    # 步骤 2.3: 将 GNN 特征注入 <asm_token>
+                    inputs_embeds[asm_token_indices] = asm_features.to(inputs_embeds.dtype)
+                
             # In case input_ids.shape[1] == 1 & past_key_values != None, we are in the case of 
             # generation with cache
-            elif past_key_values is not None and asm_input_ids is not None and input_ids.shape[1] == 1:
+            elif past_key_values is not None and longelm_input_ids is not None and input_ids.shape[1] == 1:
                 # Retrieve the first layer to inspect the logits and mask out the hidden states
                 # that are set to 0
                 first_layer_past_key_value = past_key_values[0][0][:, :, :, 0]
@@ -344,10 +409,17 @@ class SrcProberForConditionalGeneration(PreTrainedModel):
         attention_mask=None,
         past_key_values=None,
         inputs_embeds=None,
-        asm_input_ids=None,
-        asm_attention_mask=None,
-        asm_graph_attention_mask=None,
-        asm_relative_node_positions=None,
+        longelm_input_ids=None,
+        longelm_attention_mask=None,
+        longelm_graph_attention_mask=None,
+        longelm_relative_node_positions=None,
+        gnn_edge_index=None,
+        gnn_batch_index=None,
+        gnn_target_node_indices=None,
+        # asm_input_ids=None,
+        # asm_attention_mask=None,
+        # asm_graph_attention_mask=None,
+        # asm_relative_node_positions=None,
         **kwargs,
     ):
         if past_key_values is not None:
@@ -395,13 +467,58 @@ class SrcProberForConditionalGeneration(PreTrainedModel):
                 "past_key_values": past_key_values,
                 "use_cache": kwargs.get("use_cache"),
                 "attention_mask": attention_mask,
-                "asm_input_ids": asm_input_ids,
-                "asm_attention_mask": asm_attention_mask,
-                "asm_graph_attention_mask": asm_graph_attention_mask,
-                "asm_relative_node_positions": asm_relative_node_positions,
+
+                "longelm_input_ids": longelm_input_ids,
+                "longelm_attention_mask": longelm_attention_mask,
+                "longelm_graph_attention_mask": longelm_graph_attention_mask,
+                "longelm_relative_node_positions": longelm_relative_node_positions,
+                "gnn_edge_index": gnn_edge_index,
+                "gnn_batch_index": gnn_batch_index,
+                "gnn_target_node_indices": gnn_target_node_indices,
+                # "asm_input_ids": asm_input_ids,
+                # "asm_attention_mask": asm_attention_mask,
+                # "asm_graph_attention_mask": asm_graph_attention_mask,
+                # "asm_relative_node_positions": asm_relative_node_positions,
             }
         )
         return model_inputs
+
+    def _expand_inputs_for_generation(
+        self,
+        input_ids=None,
+        expand_size=1,
+        is_encoder_decoder=False,
+        **model_kwargs,
+    ):
+        """
+        During sampling/beam search, Hugging Face 的默认实现会沿 batch 维度重复所有
+        model_kwargs。对于图结构相关的张量（Longelm/GNN 输入），其第 0 维并不代表
+        batch，而是图节点/结构本身，盲目 repeat 会破坏形状，导致 GAT 加自环时报错。
+        这里将这些键暂存，调用父类逻辑扩展其它字段后再放回去，以保持原始结构。
+        """
+        preserved_keys = {
+            "longelm_input_ids",
+            "longelm_attention_mask",
+            "longelm_graph_attention_mask",
+            "longelm_relative_node_positions",
+            "gnn_edge_index",
+            "gnn_batch_index",
+            "gnn_target_node_indices",
+        }
+        preserved = {}
+        for key in preserved_keys:
+            if key in model_kwargs:
+                preserved[key] = model_kwargs.pop(key)
+
+        expanded_input_ids, expanded_kwargs = super()._expand_inputs_for_generation(
+            expand_size=expand_size,
+            is_encoder_decoder=is_encoder_decoder,
+            input_ids=input_ids,
+            **model_kwargs,
+        )
+
+        expanded_kwargs.update(preserved)
+        return expanded_input_ids, expanded_kwargs
 
     def _reorder_cache(self, *args, **kwargs):
         return self.src_language_model._reorder_cache(*args, **kwargs)

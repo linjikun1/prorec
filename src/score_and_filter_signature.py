@@ -4,7 +4,7 @@ from tools.scorer import load_scorer
 
 
 from dataclasses import dataclass, field
-from datasets import load_dataset, Dataset, DatasetDict
+from datasets import load_dataset, Dataset, DatasetDict, load_from_disk
 import json
 import logging
 import numpy as np
@@ -99,14 +99,17 @@ def post_process(original_data_split, probed_data_split):
     processed_split = {
         'src': [],
         'codeart': [],
+        'callers': [],
+        'callees': [],
         'probed_sources': []
     }
 
     print('start post-processing...')
     for example, res in zip(tqdm(original_data_split), probed_data_split):
-        # assert example['src'] == res['src']
-        processed_split['src'].append(example['src'])  # FIXME: remove this in final test
+        processed_split['src'].append(example['src'])
         processed_split['codeart'].append(example['codeart'])
+        processed_split['callers'].append(example['callers'])
+        processed_split['callees'].append(example['callees'])
         new_probed_sources = []
         for ps in res['probed_sources']:
             new_ps = ps[strip_len:]
@@ -137,12 +140,16 @@ def score_and_filter_probed_signature(
     for bid in tqdm(range(total_batch)):
         batch_queries = []
         batch_candidates = []
-        batch_srcs = []
+        # batch_srcs = []
         for example in examples.select(range(bid * batch_size, \
                                         min((bid+1) * batch_size, len(examples)))):
-            batch_queries.append(eval(example['codeart']))
+            batch_queries.append({
+                'codeart': example['codeart'],
+                'callers': example['callers'],
+                'callees': example['callees'],
+            })
             batch_candidates += example['probed_sources']
-            batch_srcs.append(example['src'])
+            # batch_srcs.append(example['src'])
         # use scorer to get results
         scores, top_candidates = scorer.get_top_n(
             queries=batch_queries,
@@ -157,10 +164,10 @@ def score_and_filter_probed_signature(
     results = []
     for scores, cands, example in zip(filtered['scores'], filtered['candidate_signatures'], examples):
         results.append({
-            'src': example['src'],
+            # 'src': example['src'],
             'top_candidates': cands
         })
-    with open('scored_signatures.json', 'w') as f:
+    with open('../save/scored_signatures.json', 'w') as f:
         json.dump(results, f, indent=2)
     
     print(len(examples), len(filtered['scores']), len(''))
@@ -192,14 +199,16 @@ def main():
     )
 
     # load dataset
-    original_dataset = load_dataset(
-        data_args.dataset_name,
-        cache_dir=model_args.cache_dir
-    )
+    # original_dataset = load_dataset(
+    #     data_args.dataset_name,
+    #     cache_dir=model_args.cache_dir
+    # )
+    original_dataset = load_from_disk('../data/probed_data_cg/test')
+
     if data_args.probed_dataset_name.endswith('.json'):
         with open(data_args.probed_dataset_name, 'r') as f:
             examples = json.load(f)
-        probed_dataset = {'train': examples}
+        probed_dataset = {'test': examples}
     elif data_args.probed_dataset_name.startswith('PurCL/'):
         probed_dataset = load_dataset(
             data_args.probed_dataset_name,
@@ -209,7 +218,7 @@ def main():
         raise NotImplementedError
     
     # in-place post-processing
-    processed_split = post_process(original_dataset['validation'], probed_dataset['train'])
+    processed_split = post_process(original_dataset['test'], probed_dataset['test'])
 
     # filter
     filtered_split = score_and_filter_probed_signature(
@@ -220,7 +229,7 @@ def main():
         # processed_split.select(range(65)) # debug
     )
 
-    print(filtered_split)
+    print(f'== {len(filtered_split)} ==')
 
     if data_args.filtered_dataset_name:
         DatasetDict({'validation': filtered_split}).push_to_hub(

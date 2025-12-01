@@ -1,14 +1,14 @@
-dualencoder_name_or_path: PurCL/casp-moco-lmpa-c-only-sig
-dualencoder_subfolder: checkpoint-30000
-assembly_model_name_or_path: PurCL/longcodeart-ep0.3-block200-26m
-source_model_name_or_path: Salesforce/codet5p-110m-embedding
+dualencoder_name_or_path: /data1/linjk/work/prorec/save/CASP/casp-moco-lmpa-c-sig-only
+dualencoder_subfolder: checkpoint-9500
+assembly_model_name_or_path: /data1/linjk/work/prorec/model/PurCL/longcodeart-ep0.3-block200-26m/checkpoint-25000
+source_model_name_or_path: /data1/linjk/work/prorec/model/Salesforce/codet5p-110m-embedding
 
 cache_dir: ../save/.cache
 output_dir: eval_sig_scorer_outputs
 
 # new split configs
 dataset_name: PurCL/lmpa-prorec-test-1k
-probed_dataset_name: PurCL/SIG-max_new_25_rseq_50_results-p0.75-k500-4bit-last1unfreeze
+probed_dataset_name: ../save/max_new_25_rseq_50_results-p0.75-k500-4bit-last1unfreeze.json
 filtered_dataset_name:
 
 query_batch_size: 32

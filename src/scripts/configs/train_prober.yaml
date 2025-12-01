@@ -1,23 +1,23 @@
-dualencoder_name_or_path: PurCL/casp-moco-lmpa-c-only
-dualencoder_subfolder: checkpoint-17000
-asm_tokenizer_name_or_path: PurCL/longcodeart-ep0.3-block200-26m
-src_model_name_or_path: codellama/CodeLlama-7b-hf
+dualencoder_name_or_path: /data1/linjk/work/prorec/save/CASP/casp-moco-lmpa-c-only
+dualencoder_subfolder: checkpoint-9500
+asm_tokenizer_name_or_path: /data1/linjk/work/prorec/model/PurCL/longcodeart-ep0.3-block200-26m/checkpoint-25000
+src_model_name_or_path: /data1/llm_checkpoints/CodeLlama-13b-hf
 # asm_feature_select_strategy: all
 asm_feature_select_strategy: nodes
-output_dir: ../save/src_prober_codellama-7b-last1unfreeze
-hub_model_id: PurCL/src_prober_codellama-7b-last1unfreeze
-dataset_name: PurCL/lmpa-prober-alignment
-run_name: prober-codellama-7b-last1unfreeze
+output_dir: /data1/linjk/work/prorec/save/cg_src_prober_codellama-13b-last1unfreeze
+hub_model_id: PurCL/src_prober_codellama-13b-last1unfreeze
+dataset_name: ../data/bimodal-lmpa-shuffled-cg
+run_name: prober-codellama-13b-last1unfreeze
 
-max_seq_length: 512
+max_seq_length: 256
 
 max_eval_samples: 2000 # debug
 
 per_device_train_batch_size: 8
 gradient_accumulation_steps: 4
-per_device_eval_batch_size: 32
+per_device_eval_batch_size: 16
 
-dataloader_num_workers: 8
+dataloader_num_workers: 4
 remove_unused_columns: false
 do_train: true
 do_eval: true
@@ -38,10 +38,10 @@ logging_steps: 10
 save_total_limit: 1
 
 # Out
-report_to: wandb
+# report_to: wandb
 cache_dir: ../save/.cache
-push_to_hub: true
-hub_private_repo: true
+push_to_hub: false
+hub_private_repo: false
 hub_strategy: all_checkpoints
 
 overwrite_output_dir: true

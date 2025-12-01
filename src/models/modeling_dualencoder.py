@@ -22,6 +22,10 @@ import torch
 from torch import nn
 import torch.distributed as dist
 
+# --- 1. 添加 GNN 相关的导入 ---
+from torch_geometric.nn import GATv2Conv, global_mean_pool
+# --- 结束添加 ---
+
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings
 from transformers import (
@@ -89,6 +93,33 @@ class CASPOutput(ModelOutput):  # TODO: modify this part later
             for k in self.keys()
         )
 
+# --- 2. 添加 GNN 模块定义 ---
+class CG_GNN_Encoder(nn.Module):
+    def __init__(self, input_dim, hidden_dim, num_layers=2, heads=4):
+        super().__init__()
+        self.convs = nn.ModuleList()
+        self.convs.append(GATv2Conv(input_dim, hidden_dim, heads=heads))
+        for _ in range(num_layers - 1):
+            self.convs.append(GATv2Conv(hidden_dim * heads, hidden_dim, heads=heads))
+        
+        # GNN 的输出维度将是 hidden_dim * heads
+        self.output_dim = hidden_dim * heads
+
+    def forward(self, x, edge_index):
+        # x: [N_total_nodes, input_dim] (来自 Longelm 的初始特征)
+        # edge_index: [2, Num_Edges]
+        
+        for i, conv in enumerate(self.convs):
+            x = conv(x, edge_index)
+            # 最后一层之前应用激活和 dropout
+            if i < len(self.convs) - 1: 
+                x = nn.functional.elu(x)
+                x = nn.functional.dropout(x, p=0.1, training=self.training)
+            
+        # 返回所有节点强化后的特征
+        # x shape: [N_total_nodes, hidden_dim * heads]
+        return x
+# --- 结束添加 ---
 
 class DualEncoderModel(PreTrainedModel):
     config_class = DualEncoderConfig
@@ -135,7 +166,27 @@ class DualEncoderModel(PreTrainedModel):
         self.source_embed_dim = config.source_config.hidden_size
         self.projection_dim = config.projection_dim
 
-        self.assembly_projection = nn.Linear(self.assembly_embed_dim, self.projection_dim, bias=False)
+        # --- 3. 修改 __init__ 以添加 GNN ---
+        
+        # 3.1 实例化 GNN 模块
+        # (您可以将 gnn_hidden_dim 和 heads 添加到 config 中，这里使用硬编码示例)
+        gnn_hidden_dim = self.assembly_embed_dim // 4 
+        self.gnn_encoder = CG_GNN_Encoder(
+            input_dim=self.assembly_embed_dim,
+            hidden_dim=gnn_hidden_dim,
+            num_layers=2,
+            heads=4
+        )
+        
+        # 3.2 修改投影层以匹配 GNN 的输出
+        # self.assembly_projection = nn.Linear(self.assembly_embed_dim, self.projection_dim, bias=False)
+        self.assembly_projection = nn.Linear(
+            self.gnn_encoder.output_dim, 
+            self.projection_dim, 
+            bias=False
+        )
+        # --- 结束修改 ---
+
         self.source_projection = nn.Linear(self.source_embed_dim, self.projection_dim, bias=False)
         self.logit_scale = nn.Parameter(torch.tensor(self.config.logit_scale_init_value))
 
@@ -208,10 +259,23 @@ class DualEncoderModel(PreTrainedModel):
         # source_position_ids: Optional[torch.LongTensor] = None,
         # source_token_type_ids: Optional[torch.LongTensor] = None,
 
-        assembly_input_ids: Optional[torch.LongTensor] = None,
-        assembly_attention_mask: Optional[torch.Tensor] = None,
-        assembly_graph_attention_mask: Optional[torch.Tensor] = None,
-        assembly_relative_node_positions: Optional[torch.LongTensor] = None,
+        # --- 4. 修改 forward 签名 ---
+        # (删除旧的 assembly_... 参数)
+        # assembly_input_ids: Optional[torch.LongTensor] = None,
+        # assembly_attention_mask: Optional[torch.Tensor] = None,
+        # assembly_graph_attention_mask: Optional[torch.Tensor] = None,
+        # assembly_relative_node_positions: Optional[torch.LongTensor] = None,
+
+        # (添加新的 longelm_... 和 gnn_... 参数)
+        longelm_input_ids: Optional[torch.LongTensor] = None,
+        longelm_attention_mask: Optional[torch.Tensor] = None,
+        longelm_graph_attention_mask: Optional[torch.Tensor] = None,
+        longelm_relative_node_positions: Optional[torch.LongTensor] = None,
+        
+        gnn_edge_index: Optional[torch.LongTensor] = None,
+        gnn_batch_index: Optional[torch.LongTensor] = None,
+        gnn_target_node_indices: Optional[torch.LongTensor] = None,
+        # --- 结束修改签名 ---
 
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
@@ -232,23 +296,56 @@ class DualEncoderModel(PreTrainedModel):
             return_dict=return_dict,
         )
 
-        assembly_outputs = self.assembly_model(
-            input_ids=assembly_input_ids,
-            attention_mask=assembly_attention_mask,
-            graph_attention_mask=assembly_graph_attention_mask,
-            relative_node_positions=assembly_relative_node_positions,
+        # --- 5. 修改汇编侧逻辑 ---
+        # (删除旧的 assembly_outputs 计算)
+        # assembly_outputs = self.assembly_model( ... )
+
+        # 步骤 1: Longelm (CodeArt) 对所有节点进行函数内编码
+        longelm_outputs = self.assembly_model(
+            input_ids=longelm_input_ids,
+            attention_mask=longelm_attention_mask,
+            graph_attention_mask=longelm_graph_attention_mask,
+            relative_node_positions=longelm_relative_node_positions,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
+        
+        # 提取所有 N_total_nodes 个节点的初始特征
+        # 假设 LongelmModel 的 pooler_output 是元组的第二个元素
+        initial_node_features = longelm_outputs[1] # [N_total_nodes, longelm_hidden_dim]
+        
+        # 步骤 2: GNN 模块进行上下文强化
+        reinforced_node_features = self.gnn_encoder(
+            x=initial_node_features,
+            edge_index=gnn_edge_index
+        ) # [N_total_nodes, gnn_output_dim]
+        
+        # 步骤 3: 提取 Target 节点的特征
+        target_features = reinforced_node_features.index_select(0, gnn_target_node_indices)
+        # [Batch_size, gnn_output_dim]
+        
+        # 步骤 4: 投影
+        assembly_embeds = self.assembly_projection(target_features)
+        # --- 结束修改汇编侧 ---
+
+        # assembly_outputs = self.assembly_model(
+        #     input_ids=assembly_input_ids,
+        #     attention_mask=assembly_attention_mask,
+        #     graph_attention_mask=assembly_graph_attention_mask,
+        #     relative_node_positions=assembly_relative_node_positions,
+        #     output_attentions=output_attentions,
+        #     output_hidden_states=output_hidden_states,
+        #     return_dict=return_dict,
+        # )
 
         # NOTE: brute-force pooling for T5Encoder
         # source_embeds = source_outputs[1]
         source_embeds = source_outputs[0][:, 0, :]
         source_embeds = self.source_projection(source_embeds)
 
-        assembly_embeds = assembly_outputs[1]
-        assembly_embeds = self.assembly_projection(assembly_embeds)
+        # assembly_embeds = assembly_outputs[1]
+        # assembly_embeds = self.assembly_projection(assembly_embeds)
 
         # normalize features
         z1 = source_embeds / source_embeds.norm(dim=-1, keepdim=True)
@@ -281,7 +378,7 @@ class DualEncoderModel(PreTrainedModel):
             loss = clip_loss(logits_per_source)
 
         if not return_dict:
-            output = (logits_per_source, logits_per_assembly, source_embeds, assembly_embeds, source_outputs, assembly_outputs)
+            output = (logits_per_source, logits_per_assembly, source_embeds, assembly_embeds, source_outputs, longelm_outputs)
             return ((loss,) + output) if loss is not None else output
         
         return CASPOutput(
@@ -291,7 +388,7 @@ class DualEncoderModel(PreTrainedModel):
             source_embeds=source_embeds,
             assembly_embeds=assembly_embeds,
             source_model_output=source_outputs,
-            assembly_model_output=assembly_outputs
+            assembly_model_output=longelm_outputs
         )
     
     @classmethod
@@ -325,6 +422,12 @@ class MomentumDualEncoderModel(DualEncoderModel):
         for param_k in self.source_model_k.parameters():
             param_k.requires_grad = False
         
+        # --- 6. 为 GNN 添加 Key 副本 (投影层保持共享) ---
+        self.gnn_encoder_k = deepcopy(self.gnn_encoder)
+        for param_k in self.gnn_encoder_k.parameters():
+            param_k.requires_grad = False
+        # --- 结束添加 ---
+
         # create the queues
         self.register_buffer("source_queue", torch.randn(config.projection_dim, self.K))
         self.source_queue = nn.functional.normalize(self.source_queue, dim=0)
@@ -349,6 +452,13 @@ class MomentumDualEncoderModel(DualEncoderModel):
             self.assembly_model.parameters(), self.assembly_model_k.parameters()
         ):
             param_k.data = param_k.data * self.m + param_q.data * (1.0 - self.m)
+            
+        # --- 7. 添加 GNN 的动量更新 ---
+        for param_q, param_k in zip(
+            self.gnn_encoder.parameters(), self.gnn_encoder_k.parameters()
+        ):
+            param_k.data = param_k.data * self.m + param_q.data * (1.0 - self.m)
+        # --- 结束添加 ---
 
     @torch.no_grad()
     def _dequeue_and_enqueue(self, source_keys, assembly_keys):
@@ -357,14 +467,27 @@ class MomentumDualEncoderModel(DualEncoderModel):
         assembly_keys = concat_all_gather(assembly_keys)
     
         batch_size = source_keys.shape[0]
-
+        K = self.K
         ptr = int(self.queue_ptr)
-        assert self.K % batch_size == 0  # for simplicity
+        # assert self.K % batch_size == 0  # for simplicity
 
-        # replace the keys at ptr (dequeue and enqueue)
-        self.source_queue[:, ptr : ptr + batch_size] = source_keys.T
-        self.assembly_queue[:, ptr : ptr + batch_size] = assembly_keys.T
-        ptr = (ptr + batch_size) % self.K  # move pointer
+        # --- 关键改动，从这里只写得下的部分 ---
+        if ptr + batch_size <= K:
+            # 一次写完
+            self.source_queue[:, ptr:ptr + batch_size] = source_keys.T
+            self.assembly_queue[:, ptr:ptr + batch_size] = assembly_keys.T
+            ptr = (ptr + batch_size) % K
+        else:
+            # 队尾写一部分，队首写一部分
+            end_len = K - ptr
+            rest_len = batch_size - end_len
+            # 队尾
+            self.source_queue[:, ptr:] = source_keys[:end_len].T
+            self.assembly_queue[:, ptr:] = assembly_keys[:end_len].T
+            # 队首
+            self.source_queue[:, :rest_len] = source_keys[end_len:].T
+            self.assembly_queue[:, :rest_len] = assembly_keys[end_len:].T
+            ptr = rest_len  # 已经循环
 
         self.queue_ptr[0] = ptr
 
@@ -375,10 +498,25 @@ class MomentumDualEncoderModel(DualEncoderModel):
         # source_position_ids: Optional[torch.LongTensor] = None,
         # source_token_type_ids: Optional[torch.LongTensor] = None,
 
-        assembly_input_ids: Optional[torch.LongTensor] = None,
-        assembly_attention_mask: Optional[torch.Tensor] = None,
-        assembly_graph_attention_mask: Optional[torch.Tensor] = None,
-        assembly_relative_node_positions: Optional[torch.LongTensor] = None,
+        # --- 8. 修改 forward 签名 (同上) ---
+        longelm_input_ids: Optional[torch.LongTensor] = None,
+        longelm_attention_mask: Optional[torch.Tensor] = None,
+        longelm_graph_attention_mask: Optional[torch.Tensor] = None,
+        longelm_relative_node_positions: Optional[torch.LongTensor] = None,
+        
+        gnn_edge_index: Optional[torch.LongTensor] = None,
+        gnn_batch_index: Optional[torch.LongTensor] = None,
+        gnn_target_node_indices: Optional[torch.LongTensor] = None,
+        
+        # (删除旧的 assembly_... 参数)
+        # assembly_input_ids: Optional[torch.LongTensor] = None,
+        # ...
+        # --- 结束修改签名 ---
+
+        # assembly_input_ids: Optional[torch.LongTensor] = None,
+        # assembly_attention_mask: Optional[torch.Tensor] = None,
+        # assembly_graph_attention_mask: Optional[torch.Tensor] = None,
+        # assembly_relative_node_positions: Optional[torch.LongTensor] = None,
 
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
@@ -399,54 +537,86 @@ class MomentumDualEncoderModel(DualEncoderModel):
             return_dict=return_dict,
         )
 
-        assembly_outputs = self.assembly_model(
-            input_ids=assembly_input_ids,
-            attention_mask=assembly_attention_mask,
-            graph_attention_mask=assembly_graph_attention_mask,
-            relative_node_positions=assembly_relative_node_positions,
+        # --- 9. 修改汇编侧 Query (q2) ---
+        # (复制 DualEncoderModel.forward 中的 步骤 1-4)
+        longelm_outputs_q = self.assembly_model(
+            input_ids=longelm_input_ids,
+            attention_mask=longelm_attention_mask,
+            graph_attention_mask=longelm_graph_attention_mask,
+            relative_node_positions=longelm_relative_node_positions,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
+        initial_node_features_q = longelm_outputs_q[1]
+        reinforced_node_features_q = self.gnn_encoder(
+            x=initial_node_features_q,
+            edge_index=gnn_edge_index
+        )
+        target_features_q = reinforced_node_features_q.index_select(0, gnn_target_node_indices)
+        assembly_embeds = self.assembly_projection(target_features_q)
+        # --- 结束修改 q2 ---
+
+        # assembly_outputs = self.assembly_model(
+        #     input_ids=assembly_input_ids,
+        #     attention_mask=assembly_attention_mask,
+        #     graph_attention_mask=assembly_graph_attention_mask,
+        #     relative_node_positions=assembly_relative_node_positions,
+        #     output_attentions=output_attentions,
+        #     output_hidden_states=output_hidden_states,
+        #     return_dict=return_dict,
+        # )
 
         # NOTE: brute-force pooling for T5Encoder
         # source_embeds = source_outputs[1]
         source_embeds = source_outputs[0][:, 0, :]
         source_embeds = self.source_projection(source_embeds)
 
-        assembly_embeds = assembly_outputs[1]
-        assembly_embeds = self.assembly_projection(assembly_embeds)
+        # assembly_embeds = assembly_outputs[1]
+        # assembly_embeds = self.assembly_projection(assembly_embeds)
 
         # normalize features
         q1 = source_embeds / source_embeds.norm(dim=-1, keepdim=True)
         q2 = assembly_embeds / assembly_embeds.norm(dim=-1, keepdim=True)
 
-        # compute key features
+        # --- 10. 修改汇编侧 Key (k2) ---
         with torch.no_grad():
             if self.training:
-                self._momentum_unpdate_key_encoder()
+                self._momentum_unpdate_key_encoder() # (这个函数已被我们更新)
 
+            # 源码侧 Key (k1) (保持不变)
             k1 = self.source_model_k(
                 input_ids=source_input_ids,
-                attention_mask=source_attention_mask,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
+                # ...
                 return_dict=return_dict,
             )[0][:, 0, :]
-            k1 = self.source_projection(k1)
+            k1 = self.source_projection(k1) # 遵循原始代码，使用共享投影层
             k1 = k1 / k1.norm(dim=-1, keepdim=True)
 
-            k2 = self.assembly_model_k(
-                input_ids=assembly_input_ids,
-                attention_mask=assembly_attention_mask,
-                graph_attention_mask=assembly_graph_attention_mask,
-                relative_node_positions=assembly_relative_node_positions,
+            # 汇编侧 Key (k2)
+            # (删除旧的 k2 计算)
+            # k2 = self.assembly_model_k(...)
+            # k2 = self.assembly_projection(k2)
+
+            # (使用 CodeArt -> GNN -> 投影 流程，但使用 _k 模型)
+            longelm_outputs_k = self.assembly_model_k(
+                input_ids=longelm_input_ids,
+                attention_mask=longelm_attention_mask,
+                graph_attention_mask=longelm_graph_attention_mask,
+                relative_node_positions=longelm_relative_node_positions,
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
-            )[1]
-            k2 = self.assembly_projection(k2)
+            )
+            initial_node_features_k = longelm_outputs_k[1]
+            reinforced_node_features_k = self.gnn_encoder_k(
+                x=initial_node_features_k,
+                edge_index=gnn_edge_index
+            )
+            target_features_k = reinforced_node_features_k.index_select(0, gnn_target_node_indices)
+            k2 = self.assembly_projection(target_features_k) # 遵循原始代码，使用共享投影层
             k2 = k2 / k2.norm(dim=-1, keepdim=True)
+            # --- 结束修改 k2 ---
 
         # positive logits
         src_l_pos = torch.einsum("nc,nc->n", [q1, k2]).unsqueeze(-1)
@@ -512,10 +682,21 @@ class DualEncoderRanker(MomentumDualEncoderModel):
         source_input_ids: Optional[torch.LongTensor] = None,
         source_attention_mask: Optional[torch.Tensor] = None,
 
-        assembly_input_ids: Optional[torch.LongTensor] = None,
-        assembly_attention_mask: Optional[torch.Tensor] = None,
-        assembly_graph_attention_mask: Optional[torch.Tensor] = None,
-        assembly_relative_node_positions: Optional[torch.LongTensor] = None,
+        # assembly_input_ids: Optional[torch.LongTensor] = None,
+        # assembly_attention_mask: Optional[torch.Tensor] = None,
+        # assembly_graph_attention_mask: Optional[torch.Tensor] = None,
+        # assembly_relative_node_positions: Optional[torch.LongTensor] = None,
+
+        # --- 修改输入签名 ---
+        longelm_input_ids: Optional[torch.LongTensor] = None,
+        longelm_attention_mask: Optional[torch.Tensor] = None,
+        longelm_graph_attention_mask: Optional[torch.Tensor] = None,
+        longelm_relative_node_positions: Optional[torch.LongTensor] = None,
+        
+        gnn_edge_index: Optional[torch.LongTensor] = None,
+        gnn_batch_index: Optional[torch.LongTensor] = None,
+        gnn_target_node_indices: Optional[torch.LongTensor] = None,
+        # ------------------
 
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
@@ -538,11 +719,21 @@ class DualEncoderRanker(MomentumDualEncoderModel):
             return_dict=return_dict,
         )
 
-        assembly_outputs = self.assembly_model(
-            input_ids=assembly_input_ids,
-            attention_mask=assembly_attention_mask,
-            graph_attention_mask=assembly_graph_attention_mask,
-            relative_node_positions=assembly_relative_node_positions,
+        # assembly_outputs = self.assembly_model(
+        #     input_ids=assembly_input_ids,
+        #     attention_mask=assembly_attention_mask,
+        #     graph_attention_mask=assembly_graph_attention_mask,
+        #     relative_node_positions=assembly_relative_node_positions,
+        #     output_attentions=output_attentions,
+        #     output_hidden_states=output_hidden_states,
+        #     return_dict=return_dict,
+        # )
+
+        longelm_outputs = self.assembly_model(
+            input_ids=longelm_input_ids,
+            attention_mask=longelm_attention_mask,
+            graph_attention_mask=longelm_graph_attention_mask,
+            relative_node_positions=longelm_relative_node_positions,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
@@ -552,8 +743,15 @@ class DualEncoderRanker(MomentumDualEncoderModel):
         source_embeds = source_outputs[0][:, 0, :]
         source_embeds = self.source_projection(source_embeds)
 
-        assembly_embeds = assembly_outputs[1]
-        assembly_embeds = self.assembly_projection(assembly_embeds)
+        initial_node_features = longelm_outputs[1]
+        
+        reinforced_node_features = self.gnn_encoder(
+            x=initial_node_features,
+            edge_index=gnn_edge_index
+        )
+        
+        target_features = reinforced_node_features.index_select(0, gnn_target_node_indices)
+        assembly_embeds = self.assembly_projection(target_features)
 
         # normalize features
         e_src = source_embeds / source_embeds.norm(dim=-1, keepdim=True)
@@ -575,7 +773,7 @@ class DualEncoderRanker(MomentumDualEncoderModel):
             loss = nn.functional.kl_div(log_input, target_scores, log_target=log_target)   # NOTE: log_target is False by default
 
         if not return_dict:
-            output = (None, logits_per_asm, source_embeds, assembly_embeds, source_outputs, assembly_outputs)
+            output = (None, logits_per_asm, source_embeds, assembly_embeds, source_outputs, longelm_outputs)
             return ((loss,) + output) if loss is not None else output
         
         return CASPOutput(
@@ -585,5 +783,5 @@ class DualEncoderRanker(MomentumDualEncoderModel):
             source_embeds=source_embeds,
             assembly_embeds=assembly_embeds,
             source_model_output=source_outputs,
-            assembly_model_output=assembly_outputs
+            assembly_model_output=longelm_outputs
         )

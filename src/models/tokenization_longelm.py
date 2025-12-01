@@ -146,3 +146,103 @@ class LongelmTokenizer(PreTrainedTokenizerFast):
             'graph_attention_mask': torch.stack(batch['graph_attention_mask']),
             'relative_node_positions': torch.stack(batch['relative_node_positions'])
         }
+    
+    def batch_inst_encode_cg(
+        self,
+        examples,
+        max_transitions=None,
+    ):
+        import ast
+        def process(item):
+            # if isinstance(item['code'], str):
+            #     encoded = self.inst_encode(eval(item['code']), eval(item['data_dep']))
+            # else:
+            while isinstance(item, str):
+                item = ast.literal_eval(item)
+            encoded = self.inst_encode(item['code'], item['data_dep'])
+            return encoded
+
+        # --- GNN 批处理所需的新列表 ---
+        # 1. Longelm (CodeArt) 输入
+        longelm_inputs_list = []  # 存储所有节点 (target+callers+callees) 的 'encoded' 字典
+        
+        # 2. GNN 图结构输入
+        edge_index_list = []       # 存储 (src, dst) 边元组
+        target_node_indices = []   # 存储每个样本的 target 节点在批次中的全局索引
+        batch_indices = []         # 存储每个节点属于哪个原始样本
+        
+        node_counter = 0           # 跟踪批次中的全局节点索引
+
+        # --- 遍历批次中的每个样本 (example) ---
+        for i, example in enumerate(examples):
+            # 1. 收集当前图的所有节点 (确保数据存在)
+            target_node = example.get('codeart') 
+            # 如果 'codeart' 不存在或为空，跳过这个样本
+            if not target_node:
+                continue
+
+            caller_nodes = example.get('callers', [])[:5]
+            callee_nodes = example.get('callees', [])[:5]
+            
+            nodes_in_current_graph = [target_node] + caller_nodes + callee_nodes
+            num_nodes = len(nodes_in_current_graph)
+
+            # 2. 确定 target 节点的全局索引
+            # 假设 target 始终是每个图的第一个节点
+            target_global_idx = node_counter
+            target_node_indices.append(target_global_idx)
+
+            # 3. 为 GNN 创建图结构 (边)
+            # 边: Callers -> Target
+            for j in range(len(caller_nodes)):
+                caller_local_idx = j + 1
+                caller_global_idx = node_counter + caller_local_idx
+                edge_index_list.append((caller_global_idx, target_global_idx))
+            
+            # 边: Target -> Callees
+            for j in range(len(callee_nodes)):
+                callee_local_idx = j + 1 + len(caller_nodes)
+                callee_global_idx = node_counter + callee_local_idx
+                edge_index_list.append((target_global_idx, callee_global_idx))
+
+            # 4. 处理所有节点，为 Longelm 准备输入
+            for node in nodes_in_current_graph:
+                longelm_inputs_list.append(process(node))
+
+            # 5. 为 GNN 创建 batch 索引
+            batch_indices.append(torch.full((num_nodes,), i, dtype=torch.long))
+            
+            # 6. 更新全局节点计数器
+            node_counter += num_nodes
+
+        # --- 批处理结束，开始将所有数据堆叠成张量 --- 
+
+
+        # 1. 堆叠 Longelm/CodeArt 的输入
+        final_input_ids = torch.stack([d['input_ids'] for d in longelm_inputs_list])
+        final_attention_mask = torch.stack([d['attention_mask'] for d in longelm_inputs_list])
+        final_rel_pos = torch.stack([d['relative_node_positions'] for d in longelm_inputs_list])
+        final_graph_attn_mask = (final_rel_pos >= 0)
+
+        # 2. 堆叠 GNN 的输入
+        if edge_index_list:
+            final_edge_index = torch.tensor(edge_index_list, dtype=torch.long).t().contiguous()
+        else:
+            final_edge_index = torch.empty((2, 0), dtype=torch.long)
+            
+        final_batch_indices = torch.cat(batch_indices)
+        final_target_node_indices = torch.tensor(target_node_indices, dtype=torch.long)
+
+        # 3. 返回一个全新的字典，包含 GNN 所需的所有信息
+        return {
+            'longelm_input_ids': final_input_ids,
+            'longelm_attention_mask': final_attention_mask,
+            'longelm_graph_attention_mask': final_graph_attn_mask,
+            'longelm_relative_node_positions': final_rel_pos,
+            
+            'gnn_edge_index': final_edge_index,
+            'gnn_batch_index': final_batch_indices,
+            'gnn_target_node_indices': final_target_node_indices,
+            
+            'return_loss': True # 保持不变，用于模型
+        }

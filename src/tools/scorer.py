@@ -40,6 +40,42 @@ class SignatureScorer(object):
             self.dual_encoder.source_model = \
                 nn.DataParallel(self.dual_encoder.source_model)
 
+    def _encode_assembly_with_cg(
+        self,
+        batch_examples: List[Dict],
+    ) -> torch.Tensor:
+        normalized_examples = []
+        for example in batch_examples:
+            if isinstance(example, dict):
+                normalized_examples.append(example)
+            elif hasattr(example, 'items'):
+                normalized_examples.append(dict(example))
+            else:
+                normalized_examples.append(example)
+
+        cg_inputs = self.assembly_tokenizer.batch_inst_encode_cg(normalized_examples)
+        cg_inputs.pop('return_loss', None)
+        cg_inputs = {k: v.to(self.device) for k, v in cg_inputs.items()}
+
+        longelm_outputs = self.dual_encoder.assembly_model(
+            input_ids=cg_inputs['longelm_input_ids'],
+            attention_mask=cg_inputs['longelm_attention_mask'],
+            graph_attention_mask=cg_inputs['longelm_graph_attention_mask'],
+            relative_node_positions=cg_inputs['longelm_relative_node_positions'],
+            output_attentions=False,
+            output_hidden_states=False,
+            return_dict=False,
+        )
+
+        initial_node_features = longelm_outputs[1]
+        reinforced_node_features = self.dual_encoder.gnn_encoder(
+            x=initial_node_features,
+            edge_index=cg_inputs['gnn_edge_index'],
+        )
+        target_features = reinforced_node_features.index_select(0, cg_inputs['gnn_target_node_indices'])
+        assembly_embeds = self.dual_encoder.assembly_projection(target_features)
+        return assembly_embeds
+
     def encode(
         self,
         examples: List[str],
@@ -66,8 +102,16 @@ class SignatureScorer(object):
                         return_tensors='pt'
                     )
                 elif encoder_type == 'assembly':
+                    batch_examples = examples[batch_id*batch_size: (batch_id+1)*batch_size]
+                    sample = batch_examples[0]
+                    if isinstance(sample, dict) or hasattr(sample, 'keys'):
+                        embeddings = self._encode_assembly_with_cg(batch_examples)
+                        if normalize_to_unit:
+                            embeddings = embeddings / embeddings.norm(dim=1, keepdim=True)
+                        embedding_list.append(embeddings.cpu())
+                        continue
                     inputs = self.assembly_tokenizer.batch_inst_encode(
-                        examples[batch_id*batch_size: (batch_id+1)*batch_size],
+                        batch_examples,
                     )
                 else:
                     raise ValueError("Unknown encoder type.")
