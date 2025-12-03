@@ -349,8 +349,8 @@ def main():
     #         token=model_args.token,
     #     )
 
-    train_dataset = load_from_disk("../data/bimodal-lmpa-shuffled/train/train")
-    valid_dataset = load_from_disk("../data/bimodal-lmpa-shuffled/valid/valid")
+    train_dataset = load_from_disk("../data/bimodal-lmpa-shuffled-cg/train/train")
+    valid_dataset = load_from_disk("../data/bimodal-lmpa-shuffled-cg/valid/valid")
     dataset = DatasetDict({
         "train": train_dataset,
         "validation": valid_dataset
@@ -526,8 +526,7 @@ def main():
             max_eval_samples = min(len(test_dataset), data_args.max_eval_samples)
             test_dataset = test_dataset.select(range(max_eval_samples))
 
-    def collate_fn(examples):
-        # NOTE: currently process on the fly
+    def collate_fn_cg(examples):
         sources = [example[source_column_name] for example in examples]
         source_inputs = source_tokenizer(
             sources,
@@ -536,16 +535,12 @@ def main():
             truncation=True,
             return_tensors='pt'
         )
-        assembly_inputs = assembly_tokenizer.batch_inst_encode(
-            [eval(example[assembly_column_name]) for example in examples]
-        )
+        assembly_inputs = assembly_tokenizer.batch_inst_encode_cg(examples)
+        assembly_inputs.pop('return_loss', None)
         return {
             'source_input_ids': source_inputs['input_ids'],
             'source_attention_mask': source_inputs['attention_mask'],
-            'assembly_input_ids': assembly_inputs['input_ids'],
-            'assembly_attention_mask': assembly_inputs['attention_mask'],
-            'assembly_graph_attention_mask': assembly_inputs['graph_attention_mask'],
-            'assembly_relative_node_positions': assembly_inputs['relative_node_positions'],
+            **assembly_inputs,
             'return_loss': True
         }
 
@@ -555,7 +550,7 @@ def main():
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
         eval_dataset=eval_dataset if training_args.do_eval else None,
-        data_collator=collate_fn,
+        data_collator=collate_fn_cg,
     )
     
     # 9. Training

@@ -1,7 +1,7 @@
-prober_name_or_path: /data1/linjk/work/prorec/save/cg_src_prober_codellama-13b-last1unfreeze
-prober_subfolder: checkpoint-6000
-dualencoder_name_or_path: /data1/linjk/work/prorec/save/CASP/casp-moco-lmpa-c-only
-dualencoder_subfolder: checkpoint-9500
+prober_name_or_path: /data1/linjk/work/prorec/save/allcg_src_prober_codellama-13b-last1unfreeze
+prober_subfolder: checkpoint-1500
+dualencoder_name_or_path: /data1/linjk/work/prorec/save/CASP/cg-casp-moco-lmpa-c-only
+dualencoder_subfolder: checkpoint-19500
 src_model_name_or_path: /data1/llm_checkpoints/CodeLlama-13b-hf
 asm_tokenizer_name_or_path: /data1/linjk/work/prorec/model/PurCL/longcodeart-ep0.3-block200-26m/checkpoint-25000
 dataset_name: 

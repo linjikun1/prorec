@@ -325,9 +325,10 @@ def main():
     asm_encoder.pooler = None   # remove pooler
     for param in asm_encoder.parameters():
         param.requires_grad = False
-    if hasattr(asm_encoder, "encoder") and hasattr(asm_encoder.encoder, "layer") and len(asm_encoder.encoder.layer) > 0:
-        for param in asm_encoder.encoder.layer[-1].parameters():
-            param.requires_grad = True
+
+    gnn_encoder = dual_encoder.gnn_encoder
+    for param in gnn_encoder.parameters():
+        param.requires_grad = False
 
     asm_tokenizer = LongelmTokenizer.from_pretrained(
         model_args.asm_tokenizer_name_or_path,
@@ -368,7 +369,7 @@ def main():
     model = SrcProberForConditionalGeneration(
         config=config,
         asm_encoder=asm_encoder,
-        gnn_encoder=None,
+        gnn_encoder=gnn_encoder,
         src_language_model=src_model
     )
     print_trainable_parameters(model)

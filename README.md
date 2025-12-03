@@ -55,13 +55,13 @@ CUDA_VISIBLE_DEVICES=0,1 /data1/linjk/envs/torchenv/bin/torchrun --nproc_per_nod
 ### 2. Contrastive assembly-sig encoder pre-alignment
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1 /data1/linjk/envs/torchenv/bin/torchrun --nproc_per_node=2 run_casp_signature.py scripts/configs/train_casp_moco_sig.yaml
+CUDA_VISIBLE_DEVICES=1,3 /data1/linjk/envs/torchenv/bin/torchrun --nproc_per_node=2 run_casp_signature.py scripts/configs/train_casp_moco_sig.yaml
 ```
 
 ### 3. Binary-source encoder-decoder alignment
 
 ```bash
-CUDA_VISIBLE_DEVICES=6 /data1/linjk/envs/torchenv/bin/torchrun --nproc_per_node=1 run_prober.py scripts/configs/train_prober.yaml
+CUDA_VISIBLE_DEVICES=3,6 /data1/linjk/envs/torchenv/bin/torchrun --nproc_per_node=2 run_prober.py scripts/configs/train_prober.yaml
 ```
 
 ### 4. Probing Function Signature
@@ -71,7 +71,7 @@ python ../data/probed_data_cg.py
 ```
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1 /data1/linjk/envs/torchenv/bin/accelerate launch --num_processes=2 big_model_quantized_probing.py scripts/configs/probe_quantized_codellama-34b-4bit-unfreeze.yaml
+CUDA_VISIBLE_DEVICES=1,3 /data1/linjk/envs/torchenv/bin/accelerate launch --num_processes=2 big_model_quantized_probing.py scripts/configs/probe_quantized_codellama-34b-4bit-unfreeze.yaml
 ```
 
 ### 5. Score and Filter Probed Signatures
@@ -87,7 +87,7 @@ python ../data/probed_continue_data_cg.py
 ```
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,5,6 /data1/linjk/envs/torchenv/bin/accelerate launch --num_processes=4 big_model_quantized_probing_continue.py scripts/configs/probe_continue.yaml
+CUDA_VISIBLE_DEVICES=0,1 /data1/linjk/envs/torchenv/bin/accelerate launch --num_processes=2 big_model_quantized_probing_continue.py scripts/configs/probe_continue.yaml
 ```
 
 ## Citation

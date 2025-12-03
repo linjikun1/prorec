@@ -52,8 +52,5 @@ test_dataset = Dataset.from_dict({
     'callees': test_callees_list  # 字典列表 (保留了所有键)
 })
 
-with open("tmp.json", 'w') as f:
-    json.dump(test_info_list, f, indent=4, ensure_ascii=True)
-
 test_dataset = DatasetDict({'test': test_dataset})
 test_dataset.save_to_disk('probed_continue_data_cg/test')

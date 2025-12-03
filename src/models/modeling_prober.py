@@ -75,15 +75,8 @@ class SrcProberForConditionalGeneration(PreTrainedModel):
             self.asm_encoder = LongelmModel(config.asm_encoder_config, add_pooling_layer=False)
         
         if gnn_encoder is None:
-            hidden_dim = config.asm_encoder_config.hidden_size // 4
-            self.gnn_encoder = CG_GNN_Encoder(
-                input_dim=config.asm_encoder_config.hidden_size,
-                hidden_dim=hidden_dim,
-                num_layers=2,
-                heads=4,
-            )
-        else:
-            self.gnn_encoder = gnn_encoder
+            raise ValueError("SrcProberForConditionalGeneration requires a 'gnn_encoder'.")
+        self.gnn_encoder = gnn_encoder
         gnn_output_dim = self.gnn_encoder.output_dim
 
         self.projection = SrcProberMultiModalProjector(config, gnn_output_dim)
@@ -96,12 +89,9 @@ class SrcProberForConditionalGeneration(PreTrainedModel):
             self.src_language_model = AutoModelForCausalLM.from_config(config.src_lm_config)
         # TODO: understand proper pad token id
         self.pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
-        # freeze encoder except last layer
+        # freeze encoder
         for p in self.asm_encoder.parameters():
             p.requires_grad = False
-        if hasattr(self.asm_encoder, "encoder") and hasattr(self.asm_encoder.encoder, "layer") and len(self.asm_encoder.encoder.layer) > 0:
-            for p in self.asm_encoder.encoder.layer[-1].parameters():
-                p.requires_grad = True
 
         # freeze lm
         if self.src_language_model:

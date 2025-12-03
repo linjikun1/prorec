@@ -1,7 +1,7 @@
 # Change here
 dataset_name: ../data/bimodal-lmpa-shuffled
 run_name: CASP-moco-lmpa-c-only
-output_dir: /data1/linjk/work/prorec/save/CASP/casp-moco-lmpa-c-only
+output_dir: /data1/linjk/work/prorec/save/CASP/cg-casp-moco-lmpa-c-only
 hub_model_id: PurCL/casp-moco-lmpa-c-only
 
 # Assembly Model Setting

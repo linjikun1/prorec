@@ -10,9 +10,11 @@ class OpenAIMetaPrompter(object):
         self,
         api_key: str,
         model_name: str,
+        base_url: str
     ):
         self.api_key = api_key
         self.model_name = model_name
+        self.base_url = base_url
         self.client = OpenAI(api_key=api_key)
 
 
@@ -90,9 +92,10 @@ class OpenAIDecompSummarizer(OpenAIMetaPrompter):
     def __init__(
         self, 
         api_key: str, 
-        model_name: str
+        model_name: str,
+        base_url: str
     ):
-        super().__init__(api_key, model_name)
+        super().__init__(api_key, model_name, base_url)
 
         self.meta_system_prompt = \
         "You are an experienced binary reverse engineer to understand "\

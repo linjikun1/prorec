@@ -447,6 +447,7 @@ def main():
     )
     asm_encoder = dual_encoder.assembly_model
     asm_encoder.pooler = None   # remove pooler
+    gnn_encoder = dual_encoder.gnn_encoder
 
     config = SrcProberConfig.from_pretrained(
         pretrained_model_name_or_path=model_args.prober_name_or_path,
@@ -458,7 +459,7 @@ def main():
         model_args.prober_name_or_path,
         config=config,
         asm_encoder=asm_encoder,
-        gnn_encoder=None,
+        gnn_encoder=gnn_encoder,
         src_language_model="empty",
         subfolder=model_args.prober_subfolder,
         cache_dir=model_args.cache_dir,
