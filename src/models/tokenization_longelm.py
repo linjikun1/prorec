@@ -193,17 +193,19 @@ class LongelmTokenizer(PreTrainedTokenizerFast):
             target_node_indices.append(target_global_idx)
 
             # 3. 为 GNN 创建图结构 (边)
-            # 边: Callers -> Target
+            # 边: Callers <-> Target (双向)
             for j in range(len(caller_nodes)):
                 caller_local_idx = j + 1
                 caller_global_idx = node_counter + caller_local_idx
                 edge_index_list.append((caller_global_idx, target_global_idx))
+                edge_index_list.append((target_global_idx, caller_global_idx)) # 添加反向边
             
-            # 边: Target -> Callees
+            # 边: Target <-> Callees (双向)
             for j in range(len(callee_nodes)):
                 callee_local_idx = j + 1 + len(caller_nodes)
                 callee_global_idx = node_counter + callee_local_idx
                 edge_index_list.append((target_global_idx, callee_global_idx))
+                edge_index_list.append((callee_global_idx, target_global_idx)) # 添加反向边
 
             # 4. 处理所有节点，为 Longelm 准备输入
             for node in nodes_in_current_graph:
