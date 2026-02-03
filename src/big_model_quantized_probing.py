@@ -1,7 +1,9 @@
 from models import (
     LongelmTokenizer,
     SrcProberConfig,
-    SrcProberForConditionalGeneration
+    SrcProberForConditionalGeneration,
+    MomentumDualEncoderModel,
+    MomentumDualEncoderConfig
 )
 
 import json
@@ -18,12 +20,13 @@ from accelerate.inference import prepare_pippy, PartialState
 from accelerate.utils import gather_object
 
 import torch
-from datasets import load_dataset
+from datasets import load_dataset, DatasetDict, load_from_disk
 
 import transformers
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
+    AutoModel,
     BitsAndBytesConfig,
     HfArgumentParser,
     TrainingArguments,
@@ -47,6 +50,12 @@ class ModelArguments:
         metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"},
     )
     prober_subfolder: str = field(
+        metadata={"help": "Subfolder of checkpoint"}
+    )
+    dualencoder_name_or_path: str = field(
+        metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"},
+    )
+    dualencoder_subfolder: str = field(
         metadata={"help": "Subfolder of checkpoint"}
     )
     asm_tokenizer_name_or_path: str = field(
@@ -168,19 +177,19 @@ class DataInferenceArguments:
         default=None, metadata={"help": "Maximum number of samples for inference."}
     )
 
-    def __post_init__(self):
-        if self.dataset_name is None and self.train_file is None and self.validation_file is None:
-            raise ValueError("Need either a dataset name or a training/validation file.")
-        else:
-            if self.train_file is not None:
-                extension = self.train_file.split(".")[-1]
-                assert extension in ["csv", "json"], "`train_file` should be a csv or a json file."
-            if self.validation_file is not None:
-                extension = self.validation_file.split(".")[-1]
-                assert extension in ["csv", "json"], "`validation_file` should be a csv or a json file."
-            if self.validation_file is not None:
-                extension = self.validation_file.split(".")[-1]
-                assert extension == "json", "`validation_file` should be a json file."
+    # def __post_init__(self):
+    #     if self.dataset_name is None and self.train_file is None and self.validation_file is None:
+    #         raise ValueError("Need either a dataset name or a training/validation file.")
+    #     else:
+    #         if self.train_file is not None:
+    #             extension = self.train_file.split(".")[-1]
+    #             assert extension in ["csv", "json"], "`train_file` should be a csv or a json file."
+    #         if self.validation_file is not None:
+    #             extension = self.validation_file.split(".")[-1]
+    #             assert extension in ["csv", "json"], "`validation_file` should be a csv or a json file."
+    #         if self.validation_file is not None:
+    #             extension = self.validation_file.split(".")[-1]
+    #             assert extension == "json", "`validation_file` should be a json file."
 
 
 def batch_inference(
@@ -297,50 +306,51 @@ def main():
     # For CSV/JSON files this script will use the first column for the full image path and the second column for the
     # captions (unless you specify column names for this with the `image_column` and `caption_column` arguments).
     # 
-    if data_args.dataset_name is not None:
-        # Downloading and loading a dataset from the hub.
-        dataset = load_dataset(
-            data_args.dataset_name,
-            data_args.dataset_config_name,
-            cache_dir=model_args.cache_dir,
-            keep_in_memory=False,
-            data_dir=data_args.data_dir,
-            token=model_args.token,
-        )
-        if "validation" not in dataset.keys():
-            dataset["validation"] = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                split=f"train[:{data_args.validation_split_percentage}%]",
-                cache_dir=model_args.cache_dir,
-                # use_auth_token=True if model_args.use_auth_token else None,
-                # streaming=data_args.streaming,
-            )
-            dataset["train"] = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                split=f"train[{data_args.validation_split_percentage}%:]",
-                cache_dir=model_args.cache_dir,
-                # use_auth_token=True if model_args.use_auth_token else None,
-                # streaming=data_args.streaming,
-            )
-    else:
-        data_files = {}
-        if data_args.train_file is not None:
-            data_files["train"] = data_args.train_file
-            extension = data_args.train_file.split(".")[-1]
-        if data_args.validation_file is not None:
-            data_files["validation"] = data_args.validation_file
-            extension = data_args.validation_file.split(".")[-1]
-        if data_args.test_file is not None:
-            data_files["test"] = data_args.test_file
-            extension = data_args.test_file.split(".")[-1]
-        dataset = load_dataset(
-            extension,
-            data_files=data_files,
-            cache_dir=model_args.cache_dir,
-            token=model_args.token,
-        )
+    # if data_args.dataset_name is not None:
+    #     # Downloading and loading a dataset from the hub.
+    #     dataset = load_dataset(
+    #         data_args.dataset_name,
+    #         data_args.dataset_config_name,
+    #         cache_dir=model_args.cache_dir,
+    #         keep_in_memory=False,
+    #         data_dir=data_args.data_dir,
+    #         token=model_args.token,
+    #     )
+        # if "validation" not in dataset.keys():
+        #     dataset["validation"] = load_dataset(
+        #         data_args.dataset_name,
+        #         data_args.dataset_config_name,
+        #         split=f"train[:{data_args.validation_split_percentage}%]",
+        #         cache_dir=model_args.cache_dir,
+        #         # use_auth_token=True if model_args.use_auth_token else None,
+        #         # streaming=data_args.streaming,
+        #     )
+        #     dataset["train"] = load_dataset(
+        #         data_args.dataset_name,
+        #         data_args.dataset_config_name,
+        #         split=f"train[{data_args.validation_split_percentage}%:]",
+        #         cache_dir=model_args.cache_dir,
+        #         # use_auth_token=True if model_args.use_auth_token else None,
+        #         # streaming=data_args.streaming,
+        #     )
+    # else:
+        # data_files = {}
+        # if data_args.train_file is not None:
+        #     data_files["train"] = data_args.train_file
+        #     extension = data_args.train_file.split(".")[-1]
+        # if data_args.validation_file is not None:
+        #     data_files["validation"] = data_args.validation_file
+        #     extension = data_args.validation_file.split(".")[-1]
+        # if data_args.test_file is not None:
+        #     data_files["test"] = data_args.test_file
+        #     extension = data_args.test_file.split(".")[-1]
+        # dataset = load_dataset(
+        #     "json",
+        #     data_files=data_files,
+        #     cache_dir=model_args.cache_dir,
+        #     token=model_args.token,
+        # )
+    dataset = load_from_disk('../data/probed_data/test')
 
     # 5. load model and tokenizer
     accelerator = Accelerator()
