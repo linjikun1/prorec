@@ -70,7 +70,7 @@ python ../data/probed_data.py
 ```
 
 ```bash
-CUDA_VISIBLE_DEVICES=1,3 /data1/linjk/envs/torchenv/bin/accelerate launch --num_processes=2 big_model_quantized_probing.py scripts/configs/probe_quantized_codellama-34b-4bit-unfreeze.yaml
+CUDA_VISIBLE_DEVICES=1 /data1/linjk/envs/torchenv/bin/accelerate launch --num_processes=1 big_model_quantized_probing.py scripts/configs/probe_quantized_codellama-34b-4bit-unfreeze.yaml
 ```
 
 ### 5. Score and Filter Probed Signatures
