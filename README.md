@@ -76,7 +76,7 @@ CUDA_VISIBLE_DEVICES=1 /data1/linjk/envs/torchenv/bin/accelerate launch --num_pr
 ### 5. Score and Filter Probed Signatures
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1 python score_and_filter_signature.py scripts/configs/filter_sig.yaml
+CUDA_VISIBLE_DEVICES=1 python score_and_filter_signature.py scripts/configs/filter_sig.yaml
 ```
 
 ### 6. Probing continue
