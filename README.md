@@ -86,7 +86,7 @@ python ../data/probed_continue_data.py
 ```
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1 /data1/linjk/envs/torchenv/bin/accelerate launch --num_processes=2 big_model_quantized_probing_continue.py scripts/configs/probe_continue.yaml
+CUDA_VISIBLE_DEVICES=1 /data1/linjk/envs/torchenv/bin/accelerate launch --num_processes=1 big_model_quantized_probing_continue.py scripts/configs/probe_continue.yaml
 ```
 
 ## Citation
