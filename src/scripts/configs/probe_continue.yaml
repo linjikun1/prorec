@@ -1,0 +1,25 @@
+prober_name_or_path: /data1/linjk/work/prorec/save/src_prober_codellama-13b-last1unfreeze
+prober_subfolder: checkpoint-6000
+dualencoder_name_or_path: /data1/linjk/work/prorec/save/CASP/casp-moco-lmpa-c-only
+dualencoder_subfolder: checkpoint-9500
+src_model_name_or_path: /data3/linjk/model/CodeLlama-13b-hf
+asm_tokenizer_name_or_path: /data1/linjk/work/prorec/model/PurCL/longcodeart-ep0.3-block200-26m/checkpoint-25000
+dataset_name: 
+output_dir: ../save
+output_file: probed_src.json
+quantization: 4bit
+
+max_new_tokens: 60
+num_return_sequences: 1
+temperature: 1.0
+top_k: 500
+top_p: 0.5
+
+
+parallel_inference_split: 1/1
+
+per_device_eval_batch_size: 16
+
+remove_unused_columns: false
+
+cache_dir: /data1/linjk/work/prorec/save/.cache
