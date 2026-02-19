@@ -4,13 +4,13 @@ import json
 from tqdm import tqdm
 from datasets import Dataset, DatasetDict
 
-with gzip.open("original/cg_data_codeart.pkl.gz", "rb") as f:
+with gzip.open("/data3/linjk/study/work/prorec_aug/data/original/x64_O1/cg_data_codeart.pkl.gz", "rb") as f:
     data = pickle.load(f)
 
 total = len(data)
 test_data = data[int(total * 0.9):]
 
-with open('../save/scored_signatures.json', 'r') as f:
+with open('/data3/linjk/study/work/prorec_aug/save/scored_signatures.json', 'r') as f:
     scored_signatures = json.load(f)
 
 test_info_list = []
@@ -53,4 +53,4 @@ test_dataset = Dataset.from_dict({
 })
 
 test_dataset = DatasetDict({'test': test_dataset})
-test_dataset.save_to_disk('probed_continue_data_cg/test')
+test_dataset.save_to_disk('/data3/linjk/study/work/prorec_aug/data/probed_continue_data_cg/test')

@@ -22,6 +22,38 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message
 logger = logging.getLogger(__name__)
 
 
+def get_best_checkpoint(model_path: str) -> str:
+    """
+    自动检测最佳checkpoint。
+    支持特殊值: 'auto', 'last', 'best'
+    返回checkpoint子目录名称（如 'checkpoint-8000'）
+    """
+    if not os.path.exists(model_path):
+        raise ValueError(f"Model path does not exist: {model_path}")
+    
+    # 查找所有checkpoint目录
+    checkpoints = []
+    for item in os.listdir(model_path):
+        if item.startswith('checkpoint-'):
+            checkpoint_path = os.path.join(model_path, item)
+            if os.path.isdir(checkpoint_path):
+                # 提取checkpoint编号
+                try:
+                    checkpoint_num = int(item.split('-')[1])
+                    checkpoints.append((checkpoint_num, item))
+                except (IndexError, ValueError):
+                    continue
+    
+    if not checkpoints:
+        raise ValueError(f"No checkpoints found in {model_path}")
+    
+    # 返回编号最大的checkpoint
+    checkpoints.sort(key=lambda x: x[0], reverse=True)
+    best_checkpoint = checkpoints[0][1]
+    logger.info(f"Auto-detected best checkpoint: {best_checkpoint} from {model_path}")
+    return best_checkpoint
+
+
 @dataclass
 class ModelArguments:
     """
@@ -34,7 +66,7 @@ class ModelArguments:
     )
     dualencoder_subfolder: str = field(
         default=None, metadata={
-            "help": "Subfolder of the model checkpoint, e.g. `checkpoint-1000`."
+            "help": "Subfolder of the model checkpoint. Use 'auto' or 'last' to automatically detect the latest checkpoint."
         }
     )
     source_model_name_or_path: Optional[str] = field(
@@ -191,6 +223,10 @@ def main():
             yaml_file=os.path.abspath(sys.argv[1]))
     else:
         model_args, data_args = parser.parse_args_into_dataclasses()
+
+    # Auto-detect checkpoint if needed
+    if model_args.dualencoder_subfolder and model_args.dualencoder_subfolder.lower() in ['auto', 'last', 'best']:
+        model_args.dualencoder_subfolder = get_best_checkpoint(model_args.dualencoder_name_or_path)
 
     # load scorer
     scorer = load_scorer(

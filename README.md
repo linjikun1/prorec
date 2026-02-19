@@ -45,23 +45,23 @@ export WANDB_DISABLED=true
 ```
 
 ```bash
-python ../data/run_casp_data.py
+python ../data/run_casp_data_cg.py
 ```
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1 /data1/linjk/envs/torchenv/bin/torchrun --nproc_per_node=2 run_casp.py scripts/configs/train_casp_moco.yaml
+PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128,expandable_segments:True CUDA_VISIBLE_DEVICES=0,1,2,3 /data1/linjk/envs/torchenv/bin/torchrun --nproc_per_node=4 run_casp.py scripts/configs/train_casp_moco.yaml
 ```
 
 ### 2. Contrastive assembly-sig encoder pre-alignment
 
 ```bash
-CUDA_VISIBLE_DEVICES=1,3 /data1/linjk/envs/torchenv/bin/torchrun --nproc_per_node=2 run_casp_signature.py scripts/configs/train_casp_moco_sig.yaml
+PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128,expandable_segments:True CUDA_VISIBLE_DEVICES=0,1,2,3 /data1/linjk/envs/torchenv/bin/torchrun --nproc_per_node=4 run_casp_signature.py scripts/configs/train_casp_moco_sig.yaml
 ```
 
 ### 3. Binary-source encoder-decoder alignment
 
 ```bash
-CUDA_VISIBLE_DEVICES=3,6 /data1/linjk/envs/torchenv/bin/torchrun --nproc_per_node=2 run_prober.py scripts/configs/train_prober.yaml
+PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128,expandable_segments:True CUDA_VISIBLE_DEVICES=0,1,2,3 /data1/linjk/envs/torchenv/bin/torchrun --nproc_per_node=4 run_prober.py scripts/configs/train_prober.yaml
 ```
 
 ### 4. Probing Function Signature
@@ -71,7 +71,7 @@ python ../data/probed_data_cg.py
 ```
 
 ```bash
-CUDA_VISIBLE_DEVICES=1,3 /data1/linjk/envs/torchenv/bin/accelerate launch --num_processes=2 big_model_quantized_probing.py scripts/configs/probe_quantized_codellama-34b-4bit-unfreeze.yaml
+PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128,expandable_segments:True CUDA_VISIBLE_DEVICES=0,1,2,3 /data1/linjk/envs/torchenv/bin/accelerate launch --num_processes=4 big_model_quantized_probing.py scripts/configs/probe_quantized_codellama-34b-4bit-unfreeze.yaml
 ```
 
 ### 5. Score and Filter Probed Signatures
@@ -87,7 +87,7 @@ python ../data/probed_continue_data_cg.py
 ```
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1 /data1/linjk/envs/torchenv/bin/accelerate launch --num_processes=2 big_model_quantized_probing_continue.py scripts/configs/probe_continue.yaml
+PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128,expandable_segments:True CUDA_VISIBLE_DEVICES=0,1,2,3 /data1/linjk/envs/torchenv/bin/accelerate launch --num_processes=4 big_model_quantized_probing_continue.py scripts/configs/probe_continue.yaml
 ```
 
 ## Citation

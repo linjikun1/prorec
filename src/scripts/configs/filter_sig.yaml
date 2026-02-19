@@ -1,5 +1,5 @@
-dualencoder_name_or_path: /data1/linjk/work/prorec/save/CASP/cg-casp-moco-lmpa-c-sig-only
-dualencoder_subfolder: checkpoint-19500
+dualencoder_name_or_path: /data1/linjk/work/prorec/save/x64_O1/CASP/cg-casp-moco-lmpa-c-sig-only
+dualencoder_subfolder: auto
 assembly_model_name_or_path: /data1/linjk/work/prorec/model/PurCL/longcodeart-ep0.3-block200-26m/checkpoint-25000
 source_model_name_or_path: /data1/linjk/work/prorec/model/Salesforce/codet5p-110m-embedding
 

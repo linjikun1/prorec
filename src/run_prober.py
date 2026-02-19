@@ -37,6 +37,39 @@ from transformers.utils.versions import require_version
 
 logger = logging.getLogger(__name__)
 
+
+def get_best_checkpoint(model_path: str) -> str:
+    """
+    自动检测最佳checkpoint。
+    支持特殊值: 'auto', 'last', 'best'
+    返回checkpoint子目录名称（如 'checkpoint-8000'）
+    """
+    if not os.path.exists(model_path):
+        raise ValueError(f"Model path does not exist: {model_path}")
+    
+    # 查找所有checkpoint目录
+    checkpoints = []
+    for item in os.listdir(model_path):
+        if item.startswith('checkpoint-'):
+            checkpoint_path = os.path.join(model_path, item)
+            if os.path.isdir(checkpoint_path):
+                # 提取checkpoint编号
+                try:
+                    checkpoint_num = int(item.split('-')[1])
+                    checkpoints.append((checkpoint_num, item))
+                except (IndexError, ValueError):
+                    continue
+    
+    if not checkpoints:
+        raise ValueError(f"No checkpoints found in {model_path}")
+    
+    # 返回编号最大的checkpoint
+    checkpoints.sort(key=lambda x: x[0], reverse=True)
+    best_checkpoint = checkpoints[0][1]
+    logger.info(f"Auto-detected best checkpoint: {best_checkpoint} from {model_path}")
+    return best_checkpoint
+
+
 @dataclass
 class ModelArguments:
     """
@@ -47,7 +80,7 @@ class ModelArguments:
         metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"},
     )
     dualencoder_subfolder: str = field(
-        metadata={"help": "Subfolder of checkpoint"}
+        metadata={"help": "Subfolder of checkpoint. Use 'auto' or 'last' to automatically detect the latest checkpoint."}
     )
     asm_tokenizer_name_or_path: str = field(
         metadata={"help": "Path to pretrained assembly tokenizer"}
@@ -294,7 +327,11 @@ def main():
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
 
-    # 5. Load pretrained model, tokenizer
+    # 5. Auto-detect checkpoint if needed
+    if model_args.dualencoder_subfolder.lower() in ['auto', 'last', 'best']:
+        model_args.dualencoder_subfolder = get_best_checkpoint(model_args.dualencoder_name_or_path)
+
+    # 6. Load pretrained model, tokenizer
     de_config = MomentumDualEncoderConfig.from_pretrained(
         model_args.dualencoder_name_or_path,
         subfolder=model_args.dualencoder_subfolder,

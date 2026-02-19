@@ -1,13 +1,13 @@
-dualencoder_name_or_path: /data1/linjk/work/prorec/save/CASP/cg-casp-moco-lmpa-c-only
-dualencoder_subfolder: checkpoint-19500
+dualencoder_name_or_path: /data1/linjk/work/prorec/save/x64_O1/CASP/cg-casp-moco-lmpa-c-only
+dualencoder_subfolder: auto
 asm_tokenizer_name_or_path: /data1/linjk/work/prorec/model/PurCL/longcodeart-ep0.3-block200-26m/checkpoint-25000
 src_model_name_or_path: /data3/linjk/model/CodeLlama-13b-hf
 # asm_feature_select_strategy: all
 asm_feature_select_strategy: nodes
-output_dir: /data1/linjk/work/prorec/save/allcg_src_prober_codellama-13b-last1unfreeze
-hub_model_id: PurCL/src_prober_codellama-13b-last1unfreeze
+output_dir: /data1/linjk/work/prorec/save/x64_O1/allcg_src_prober_codellama-13b-last1unfreeze
+hub_model_id: PurCL/x64_O1/src_prober_codellama-13b-last1unfreeze
 dataset_name: ../data/bimodal-lmpa-shuffled-cg
-run_name: prober-codellama-13b-last1unfreeze
+run_name: prober-codellama-13b-last1unfreeze-x64_O1
 
 max_seq_length: 256
 

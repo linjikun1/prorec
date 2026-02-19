@@ -3,7 +3,7 @@ import gzip
 from tqdm import tqdm
 from datasets import Dataset, DatasetDict
 
-with gzip.open("original/cg_data_codeart.pkl.gz", "rb") as f:
+with gzip.open("/data3/linjk/study/work/prorec_aug/data/original/x64_O1/cg_data_codeart.pkl.gz", "rb") as f:
     data = pickle.load(f)
 
 total = len(data)
@@ -43,4 +43,4 @@ test_dataset = Dataset.from_dict({
 })
 
 test_dataset = DatasetDict({'test': test_dataset})
-test_dataset.save_to_disk('probed_data_cg/test')
+test_dataset.save_to_disk('/data3/linjk/study/work/prorec_aug/data/probed_data_cg/test')

@@ -3,7 +3,7 @@ import gzip
 from tqdm import tqdm
 from datasets import Dataset, DatasetDict
 
-with gzip.open("original/cg_data_codeart.pkl.gz", "rb") as f:
+with gzip.open("/data3/linjk/study/work/prorec_aug/data/original/x64_O1/cg_data_codeart.pkl.gz", "rb") as f:
     data = pickle.load(f)
 
 total = len(data)
@@ -42,7 +42,7 @@ train_dataset = Dataset.from_dict({
     'callees': train_callees_list  
 })
 train_dataset = DatasetDict({'train': train_dataset})
-train_dataset.save_to_disk('bimodal-lmpa-shuffled-cg/train')
+train_dataset.save_to_disk('/data3/linjk/study/work/prorec_aug/data/bimodal-lmpa-shuffled-cg/train')
 
 
 valid_src_list = []
@@ -78,6 +78,6 @@ valid_dataset = Dataset.from_dict({
     'callees': valid_callees_list
 })
 valid_dataset = DatasetDict({'valid': valid_dataset})
-valid_dataset.save_to_disk('bimodal-lmpa-shuffled-cg/valid')
+valid_dataset.save_to_disk('/data3/linjk/study/work/prorec_aug/data/bimodal-lmpa-shuffled-cg/valid')
 
 print("数据划分完成")
